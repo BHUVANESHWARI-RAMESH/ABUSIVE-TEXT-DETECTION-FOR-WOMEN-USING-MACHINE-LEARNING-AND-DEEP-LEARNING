@@ -1,0 +1,280 @@
+import pandas as pd
+import numpy as np
+import joblib
+
+from google.colab import files
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_selection import SelectKBest, chi2
+
+from sklearn.model_selection import GridSearchCV
+
+from sklearn.tree import DecisionTreeClassifier
+
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+    classification_report
+)
+
+
+
+
+
+print("UPLOAD TRAINING DATASET")
+
+uploaded_train = files.upload()
+
+train_file = list(uploaded_train.keys())[0]
+
+train_data = pd.read_csv(
+    train_file,
+    header=None,
+    names=["text", "class"],
+    encoding="utf-8"
+)
+
+train_data = train_data.dropna()
+
+train_data["class"] = (
+    train_data["class"]
+    .astype(str)
+    .str.lower()
+    .str.strip()
+)
+
+label_map = {
+    "abusive": 1,
+    "non-abusive": 0,
+    "non abusive": 0,
+    "nonabusive": 0
+}
+
+train_data["label"] = train_data["class"].map(label_map)
+
+train_data = train_data.dropna(subset=["label"])
+
+X_train = train_data["text"].astype(str)
+
+y_train = train_data["label"].astype(int)
+
+print("\nTRAINING SAMPLES :", len(X_train))
+
+
+
+
+
+vectorizer = TfidfVectorizer(
+    max_features=10000,
+    ngram_range=(1,2),
+    sublinear_tf=True,
+    stop_words='english'
+)
+
+X_train_tfidf = vectorizer.fit_transform(X_train)
+
+print("\nTF-IDF SHAPE :", X_train_tfidf.shape)
+
+
+
+
+
+selector = SelectKBest(chi2, k=5000)
+
+X_train_selected = selector.fit_transform(
+    X_train_tfidf,
+    y_train
+)
+
+print("\nAFTER FEATURE SELECTION :", X_train_selected.shape)
+
+
+
+
+
+print("\nTRAINING DECISION TREE...")
+
+dt_model = DecisionTreeClassifier(random_state=42)
+
+dt_params = {
+    'criterion': ['gini', 'entropy'],
+    'max_depth': [None, 10, 20],
+    'min_samples_split': [2, 5, 10],
+    'min_samples_leaf': [1, 2, 4]
+}
+
+dt_grid = GridSearchCV(
+    dt_model,
+    dt_params,
+    cv=5,
+    scoring='accuracy',
+    n_jobs=-1
+)
+
+dt_grid.fit(X_train_selected, y_train)
+
+best_dt = dt_grid.best_estimator_
+
+print("\nBEST DECISION TREE PARAMETERS :")
+print(dt_grid.best_params_)
+
+
+
+
+
+
+print("\nUPLOAD TEST DATASET")
+
+uploaded_test = files.upload()
+
+test_file = list(uploaded_test.keys())[0]
+
+test_data = pd.read_csv(
+    test_file,
+    encoding="utf-8",
+    engine="python"
+)
+
+X_test = test_data.iloc[:, 0].astype(str)
+
+X_test = X_test[X_test != "Text"]
+
+X_test = X_test[X_test.str.strip() != ""]
+
+X_test = X_test.reset_index(drop=True)
+
+print("\nTEST SAMPLES :", len(X_test))
+
+
+
+
+
+X_test_tfidf = vectorizer.transform(X_test)
+
+X_test_selected = selector.transform(X_test_tfidf)
+
+
+
+
+
+dt_pred = best_dt.predict(X_test_selected)
+
+print("\nPREDICTION COMPLETED SUCCESSFULLY!")
+
+
+
+
+
+print("\nUPLOAD ORIGINAL LABEL DATASET")
+
+uploaded_original = files.upload()
+
+original_file = list(uploaded_original.keys())[0]
+
+original_data = pd.read_csv(original_file)
+
+y_true = (
+    original_data.iloc[:, 1]
+    .fillna(0)
+    .astype(int)
+)
+
+y_true = y_true.reset_index(drop=True)
+
+
+
+
+
+min_len = min(len(y_true), len(dt_pred))
+
+y_true = y_true[:min_len]
+
+dt_pred = dt_pred[:min_len]
+
+
+
+
+
+print("\n===================================")
+print("DECISION TREE PERFORMANCE")
+print("===================================\n")
+
+accuracy = accuracy_score(y_true, dt_pred)
+
+precision = precision_score(y_true, dt_pred)
+
+recall = recall_score(y_true, dt_pred)
+
+f1 = f1_score(y_true, dt_pred)
+
+print(f"Accuracy  : {accuracy:.4f}")
+print(f"Precision : {precision:.4f}")
+print(f"Recall    : {recall:.4f}")
+print(f"F1 Score  : {f1:.4f}")
+
+print("\nCONFUSION MATRIX :\n")
+
+print(confusion_matrix(y_true, dt_pred))
+
+print("\nCLASSIFICATION REPORT :\n")
+
+print(classification_report(y_true, dt_pred))
+
+
+
+
+
+output_df = pd.DataFrame()
+
+output_df["Text"] = X_test.values
+
+output_df["Original_Label"] = y_true.values
+
+output_df["DT_Prediction"] = dt_pred
+
+label_reverse = {
+    0: "non-abusive",
+    1: "abusive"
+}
+
+output_df["Original_Label"] = (
+    output_df["Original_Label"]
+    .map(label_reverse)
+)
+
+output_df["DT_Prediction"] = (
+    output_df["DT_Prediction"]
+    .map(label_reverse)
+)
+
+output_file = "DT_Final_Result.csv"
+
+output_df.to_csv(
+    output_file,
+    index=False,
+    encoding="utf-8-sig"
+)
+
+print("\nFINAL RESULT FILE SAVED SUCCESSFULLY!")
+
+files.download(output_file)
+
+
+
+
+
+joblib.dump(best_dt, "DecisionTree_Model.pkl")
+
+joblib.dump(vectorizer, "TFIDF_Vectorizer.pkl")
+
+joblib.dump(selector, "Feature_Selector.pkl")
+
+print("\nMODEL SAVED SUCCESSFULLY!")
+
+
+
+
+
